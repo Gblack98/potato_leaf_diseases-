@@ -1,0 +1,146 @@
+import kagglehub
+from tensorflow.keras.models import load_model, Model
+from tensorflow.keras.layers import Dense, Dropout
+from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.preprocessing.image import ImageDataGenerator
+from tensorflow.keras.callbacks import ModelCheckpoint, EarlyStopping
+import matplotlib.pyplot as plt
+import numpy as np
+import os
+
+# Télécharger le dataset
+dataset_path = kagglehub.dataset_download("emmarex/plantdisease")
+print(f"Chemin du dataset : {dataset_path}")
+
+# Charger le modèle pré-entraîné
+model_path = '/content/sample_data/potato_disease_model(1).h5'
+model = load_model(model_path)
+
+# Chemin vers le dossier 'PlantVillage' dans le dataset téléchargé
+dataset_dir = os.path.join(os.path.expanduser('~'), '.cache/kagglehub/datasets/emmarex/plantdisease/versions/1/PlantVillage')
+
+# Taille de l'image attendue par le modèle
+image_size = (150, 150)
+
+# Paramètres pour l'augmentation des données et la normalisation
+train_datagen = ImageDataGenerator(
+    rescale=1./255,               # Normaliser les pixels entre 0 et 1
+    shear_range=0.2,              # Appliquer un cisaillement aléatoire
+    zoom_range=0.2,               # Appliquer un zoom aléatoire
+    horizontal_flip=True,         # Appliquer un retournement horizontal aléatoire
+    validation_split=0.2          # Séparer 20% pour la validation
+)
+
+validation_datagen = ImageDataGenerator(
+    rescale=1./255,               # Normaliser les pixels entre 0 et 1
+    validation_split=0.2          # Séparer 20% pour la validation
+)
+
+# Chargement des images d'entraînement et de validation depuis le dossier
+batch_size = 32
+train_generator = train_datagen.flow_from_directory(
+    dataset_dir,
+    target_size=image_size,       # Redimensionner toutes les images à la taille attendue par le modèle
+    batch_size=batch_size,        # Taille du lot d'entraînement
+    class_mode='categorical',     # Multiclasse (une étiquette par image)
+    subset='training',            # Ensemble d'entraînement
+    shuffle=True                  # Mélanger les images
+)
+
+validation_generator = validation_datagen.flow_from_directory(
+    dataset_dir,
+    target_size=image_size,       # Redimensionner toutes les images à la taille attendue par le modèle
+    batch_size=batch_size,        # Taille du lot de validation
+    class_mode='categorical',     # Multiclasse
+    subset='validation',          # Ensemble de validation
+    shuffle=True                  # Mélanger les images
+)
+
+# Vérification des classes et de l'organisation des données
+print(f"Classes disponibles : {train_generator.class_indices}")
+print(f"Nombre d'images d'entraînement : {train_generator.samples}")
+print(f"Nombre d'images de validation : {validation_generator.samples}")
+
+# Affichage de quelques exemples d'images
+x_batch, y_batch = next(train_generator)
+plt.figure(figsize=(14, 10))
+for i in range(10):
+    plt.subplot(1, 10, i + 1)
+    plt.imshow(x_batch[i])
+    plt.title(f"Classe : {np.argmax(y_batch[i])}")
+    plt.axis('off')
+plt.show()
+
+# Vérification de la taille d'entrée du modèle
+print(f"Taille d'entrée du modèle : {model.input_shape}")
+
+# Adapter le modèle aux nouvelles classes
+x = model.output
+x = Dense(1024, activation='relu', name='dense_2_new_unique')(x)
+x = Dropout(0.5, name='dropout_1_new_unique')(x)
+predictions = Dense(len(train_generator.class_indices), activation='softmax', name='dense_3_new_unique')(x)
+
+model = Model(inputs=model.input, outputs=predictions)
+
+# Compiler le modèle avec un taux d'apprentissage personnalisé
+optimizer = Adam(learning_rate=0.0001)
+model.compile(optimizer=optimizer, loss='categorical_crossentropy', metrics=['accuracy'])
+
+# Afficher un résumé du modèle
+model.summary()
+
+# Callbacks pour sauvegarder le meilleur modèle et arrêter l'entraînement prématurément si nécessaire
+checkpoint = ModelCheckpoint(
+    '/content/PlantVillage_PLD_disease_model_best.h5',
+    monitor='val_accuracy',
+    save_best_only=True,
+    mode='max',
+    verbose=1
+)
+
+early_stopping = EarlyStopping(
+    monitor='val_loss',
+    patience=5,
+    restore_best_weights=True,
+    verbose=1
+)
+
+# Entraîner le modèle avec les callbacks
+epochs = 20
+history = model.fit(
+    train_generator,
+    epochs=epochs,
+    validation_data=validation_generator,
+    callbacks=[checkpoint, early_stopping]
+)
+
+# Évaluer les performances du modèle
+eval_result = model.evaluate(validation_generator)
+print(f"Loss: {eval_result[0]}, Accuracy: {eval_result[1]}")
+
+# Sauvegarder le modèle ajusté
+model.save('/content/PlantVillage_PLD_disease_model_trained.keras')
+
+# Courbes de précision et de perte
+plt.figure(figsize=(12, 6))
+
+# Précision
+plt.subplot(1, 2, 1)
+plt.plot(history.history['accuracy'], label='accuracy')
+plt.plot(history.history['val_accuracy'], label='val_accuracy')
+plt.xlabel('Epochs')
+plt.ylabel('Accuracy')
+plt.legend(loc='lower right')
+plt.title('Training and Validation Accuracy')
+
+# Perte
+plt.subplot(1, 2, 2)
+plt.plot(history.history['loss'], label='loss')
+plt.plot(history.history['val_loss'], label='val_loss')
+plt.xlabel('Epochs')
+plt.ylabel('Loss')
+plt.legend(loc='upper right')
+plt.title('Training and Validation Loss')
+
+plt.tight_layout()
+plt.show()
